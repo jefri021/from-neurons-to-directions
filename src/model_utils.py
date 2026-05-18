@@ -18,8 +18,8 @@ from contextlib import contextmanager
 # ── Kaggle input paths ────────────────────────────────────────────────────────
 
 PATHS = {
-    "base":     "/kaggle/input/llama-3.1-8b/transformers/default/1",
-    "instruct": "/kaggle/input/llama-3.1-8b-instruct/transformers/default/1",
+    "base":     "/kaggle/input/models/metaresearch/llama-3.2/transformers/3b/1",
+    "instruct": "/kaggle/input/models/metaresearch/llama-3.2/transformers/3b-instruct/1",
 }
 
 
