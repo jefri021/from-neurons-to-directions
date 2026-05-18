@@ -169,14 +169,15 @@ class HookManager:
                 #     # Llama layer output is a tuple; [0] is the hidden state
                 #     self._storage[f"residual_{i}"] = output[0].detach().cpu()
                 def hook(module, input, output):
-                    print(f"output type: {type(output)}")
-                    print(f"len(output): {len(output)}")
-                    for j, o in enumerate(output):
-                        if hasattr(o, 'shape'):
-                            print(f"  output[{j}] shape: {o.shape}")
-                        else:
-                            print(f"  output[{j}]: {o}")
-                    self._storage[f"residual_{i}"] = output[0].detach().cpu()
+                    # print(f"output type: {type(output)}")
+                    # print(f"len(output): {len(output)}")
+                    # for j, o in enumerate(output):
+                    #     if hasattr(o, 'shape'):
+                    #         print(f"  output[{j}] shape: {o.shape}")
+                    #     else:
+                    #         print(f"  output[{j}]: {o}")
+                    # output IS the hidden
+                    self._storage[f"residual_{i}"] = output.detach().cpu()
                 return hook
 
             self._handles.append(layer.register_forward_hook(make_hook(idx)))
