@@ -57,7 +57,7 @@ def load_model_and_tokenizer(
 
     model = AutoModelForCausalLM.from_pretrained(
         path,
-        torch_dtype=dtype,
+        dtype=dtype,
         device_map="auto",  # handles single/multi-GPU and CPU offload automatically
     )
     model.eval()
