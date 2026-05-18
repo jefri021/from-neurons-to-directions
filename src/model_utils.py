@@ -171,11 +171,11 @@ class HookManager:
                 def hook(module, input, output):
                     print(f"output type: {type(output)}")
                     print(f"len(output): {len(output)}")
-                    for i, o in enumerate(output):
+                    for j, o in enumerate(output):
                         if hasattr(o, 'shape'):
-                            print(f"  output[{i}] shape: {o.shape}")
+                            print(f"  output[{j}] shape: {o.shape}")
                         else:
-                            print(f"  output[{i}]: {o}")
+                            print(f"  output[{j}]: {o}")
                     self._storage[f"residual_{i}"] = output[0].detach().cpu()
                 return hook
 
