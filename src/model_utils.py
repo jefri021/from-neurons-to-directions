@@ -199,7 +199,6 @@ class HookManager:
             def make_hook(i):
                 def hook(module, input, output):
                     # input[0] is the tensor flowing into down_proj
-                    print(len(input))
                     self._storage[f"neurons_{i}"] = input[0].detach().cpu()
                 return hook
 
