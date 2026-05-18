@@ -165,8 +165,17 @@ class HookManager:
             layer = self._get_layer(idx)
 
             def make_hook(i):
+                # def hook(module, input, output):
+                #     # Llama layer output is a tuple; [0] is the hidden state
+                #     self._storage[f"residual_{i}"] = output[0].detach().cpu()
                 def hook(module, input, output):
-                    # Llama layer output is a tuple; [0] is the hidden state
+                    print(f"output type: {type(output)}")
+                    print(f"len(output): {len(output)}")
+                    for i, o in enumerate(output):
+                        if hasattr(o, 'shape'):
+                            print(f"  output[{i}] shape: {o.shape}")
+                        else:
+                            print(f"  output[{i}]: {o}")
                     self._storage[f"residual_{i}"] = output[0].detach().cpu()
                 return hook
 
@@ -187,18 +196,9 @@ class HookManager:
             mlp = self._get_layer(idx).mlp
 
             def make_hook(i):
-                # def hook(module, input, output):
-                #     # input[0] is the tensor flowing into down_proj
-                #     self._storage[f"neurons_{i}"] = input[0].detach().cpu()
                 def hook(module, input, output):
-                    print(f"output type: {type(output)}")
-                    print(f"len(output): {len(output)}")
-                    for i, o in enumerate(output):
-                        if hasattr(o, 'shape'):
-                            print(f"  output[{i}] shape: {o.shape}")
-                        else:
-                            print(f"  output[{i}]: {o}")
-                    self._storage[f"residual_{i}"] = output[0].detach().cpu()
+                    # input[0] is the tensor flowing into down_proj
+                    self._storage[f"neurons_{i}"] = input[0].detach().cpu()
                 return hook
 
             self._handles.append(mlp.down_proj.register_forward_hook(make_hook(idx)))
