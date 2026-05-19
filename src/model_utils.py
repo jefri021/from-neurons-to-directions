@@ -108,11 +108,16 @@ def tokenize(
 
 def apply_chat_template(prompt: str, tokenizer) -> str:
     """
-    Wrap a raw prompt in the instruct chat template.
-    Use this when running the instruct model so the format matches training.
-    For the base model, pass the raw prompt directly.
+    Wrap a raw prompt in the instruct chat template with a system
+    instruction to complete text naturally.
     """
-    messages = [{"role": "user", "content": prompt}]
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant. Complete the following text naturally."
+        },
+        {"role": "user", "content": prompt}
+    ]
     return tokenizer.apply_chat_template(
         messages,
         tokenize=False,
