@@ -106,18 +106,27 @@ def tokenize(
     ).to(device)
 
 
-def apply_chat_template(prompt: str, tokenizer) -> str:
-    """
-    Wrap a raw prompt in the instruct chat template with a system
-    instruction to complete text naturally.
-    """
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful assistant. Complete the following text naturally."
-        },
-        {"role": "user", "content": prompt}
-    ]
+def apply_chat_template(prompt: str, tokenizer, mode="plain") -> str:
+    if mode == "plain":
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+
+    elif mode == "completion":
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a helpful assistant. "
+                    "Complete the following text naturally."
+                )
+            },
+            {"role": "user", "content": prompt}
+        ]
+
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
     return tokenizer.apply_chat_template(
         messages,
         tokenize=False,
