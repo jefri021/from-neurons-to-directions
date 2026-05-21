@@ -210,6 +210,8 @@ def ablate_direction(
     """
     r = F.normalize(direction.to(x.device), dim=0)
     # Project and subtract: remove the component along r
+    print(type(x))
+    print(type(r))
     return x - (x @ r).unsqueeze(-1) * r
 
 
