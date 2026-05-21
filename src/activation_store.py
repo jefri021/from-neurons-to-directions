@@ -111,7 +111,7 @@ class ActivationStore:
                 with torch.no_grad():
                     self.model(**inputs)
 
-            acts = hook_mgr.get_activations()
+                acts = hook_mgr.get_activations()
 
             # Extract the target token position from each activation
             for key, tensor in acts.items():
