@@ -268,11 +268,14 @@ def generate_with_ablation(
     hook_handles = []
 
     def ablation_hook(module, input, output):
-        # output[0] is the hidden state; output[1:] are other tuple elements
-        hidden = output[0]
-        hidden = ablate_direction(hidden, direction)
-        # Reconstruct the output tuple with the modified hidden state
-        return (hidden,) + output[1:]
+        # In newer transformers, layer output may be a plain tensor or a tuple
+        if isinstance(output, tuple):
+            hidden = output[0]
+            hidden = ablate_direction(hidden, direction)
+            return (hidden,) + output[1:]
+        else:
+            # output is a plain tensor
+            return ablate_direction(output, direction)
 
     layer = model.model.layers[layer_idx]
     handle = layer.register_forward_hook(ablation_hook)
@@ -309,9 +312,12 @@ def generate_with_addition(
     hook_handles = []
 
     def addition_hook(module, input, output):
-        hidden = output[0]
-        hidden = add_direction(hidden, direction, alpha=alpha)
-        return (hidden,) + output[1:]
+        if isinstance(output, tuple):
+            hidden = output[0]
+            hidden = add_direction(hidden, direction, alpha=alpha)
+            return (hidden,) + output[1:]
+        else:
+            return add_direction(output, direction, alpha=alpha)
 
     layer = model.model.layers[layer_idx]
     handle = layer.register_forward_hook(addition_hook)
