@@ -208,10 +208,7 @@ def ablate_direction(
     Returns:
         tensor of same shape as x
     """
-    r = F.normalize(direction.to(x.device), dim=0)
-    # Project and subtract: remove the component along r
-    print(type(x))
-    print(type(r))
+    r = F.normalize(direction.to(x.device, dtype=x.dtype), dim=0)  # ← add dtype=x.dtype
     return x - (x @ r).unsqueeze(-1) * r
 
 
@@ -237,7 +234,7 @@ def add_direction(
     Returns:
         tensor of same shape as x
     """
-    r = F.normalize(direction.to(x.device), dim=0)
+    r = F.normalize(direction.to(x.device, dtype=x.dtype), dim=0)  # ← add dtype=x.dtype
     return x + alpha * r
 
 
