@@ -48,29 +48,29 @@ architecture:
 
 paths:
   working_dir:  "/kaggle/working"
-  results_dir:  "/kaggle/working/results"
-  figures_dir:  "/kaggle/working/results/figures"
+  results_dir:  "/kaggle/working/from-neurons-to-directions/results"
+  figures_dir:  "/kaggle/working/from-neurons-to-directions/figures"
 
   activations:
-    base_dir:      "/kaggle/working/results/activations/base"
-    instruct_dir:  "/kaggle/working/results/activations/instruct"
+    base_dir:      "/kaggle/working/from-neurons-to-directions/activations/base"
+    instruct_dir:  "/kaggle/working/from-neurons-to-directions/activations/instruct"
 
   saved_tensors:
-    directions:             "/kaggle/working/results/directions.pt"
-    best_direction:         "/kaggle/working/results/best_direction.pt"
-    change_scores:          "/kaggle/working/results/change_scores.pt"
-    top_neurons:            "/kaggle/working/results/top_neurons.pt"
-    causal_effects:         "/kaggle/working/results/causal_effects.pt"
-    layer_sensitivity:      "/kaggle/working/results/layer_sensitivity.pt"
-    reconstruction_curves:  "/kaggle/working/results/reconstruction_curves.pt"
-    direction_survival:     "/kaggle/working/results/direction_survival.pt"
-    behavioral_comparison:  "/kaggle/working/results/behavioral_comparison.pt"
-    injection_test:         "/kaggle/working/results/injection_test.pt"
-    induction_rates:        "/kaggle/working/results/induction_rates.pt"
-    truth_directions:       "/kaggle/working/results/truth_directions.pt"
-    toxicity_directions:    "/kaggle/working/results/toxicity_directions.pt"
-    k_sweep_refusal:        "/kaggle/working/results/k_sweep_refusal.pt"
-    prompt_robustness:      "/kaggle/working/results/prompt_robustness.pt"
+    directions:             "/kaggle/working/from-neurons-to-directions/directions.pt"
+    best_direction:         "/kaggle/working/from-neurons-to-directions/best_direction.pt"
+    change_scores:          "/kaggle/working/from-neurons-to-directions/change_scores.pt"
+    top_neurons:            "/kaggle/working/from-neurons-to-directions/top_neurons.pt"
+    causal_effects:         "/kaggle/working/from-neurons-to-directions/causal_effects.pt"
+    layer_sensitivity:      "/kaggle/working/from-neurons-to-directions/layer_sensitivity.pt"
+    reconstruction_curves:  "/kaggle/working/from-neurons-to-directions/reconstruction_curves.pt"
+    direction_survival:     "/kaggle/working/from-neurons-to-directions/direction_survival.pt"
+    behavioral_comparison:  "/kaggle/working/from-neurons-to-directions/behavioral_comparison.pt"
+    injection_test:         "/kaggle/working/from-neurons-to-directions/injection_test.pt"
+    induction_rates:        "/kaggle/working/from-neurons-to-directions/induction_rates.pt"
+    truth_directions:       "/kaggle/working/from-neurons-to-directions/truth_directions.pt"
+    toxicity_directions:    "/kaggle/working/from-neurons-to-directions/toxicity_directions.pt"
+    k_sweep_refusal:        "/kaggle/working/from-neurons-to-directions/k_sweep_refusal.pt"
+    prompt_robustness:      "/kaggle/working/from-neurons-to-directions/prompt_robustness.pt"
 
 
 # ── Activation collection ─────────────────────────────────────────────────────
