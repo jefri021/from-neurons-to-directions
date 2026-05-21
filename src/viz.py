@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 from typing import Optional
+from pathlib import Path
 
 
 # ── Shared style ──────────────────────────────────────────────────────────────
@@ -63,9 +64,16 @@ COLORS = {
 
 def _save_or_return(fig, save_path: Optional[str]) -> plt.Figure:
     """Save figure if path given, always return the figure."""
+    
     if save_path:
+        save_path = Path(save_path)
+
+        # Create parent directories if they do not exist
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
         fig.savefig(save_path, bbox_inches="tight", dpi=150)
         print(f"Saved → {save_path}")
+
     return fig
 
 
