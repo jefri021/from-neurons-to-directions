@@ -55,6 +55,24 @@ class ActivationStore:
         self._data: dict[str, torch.Tensor] = {}   # accumulated activations
         self._meta: dict = {}                       # metadata for the last collect()
 
+
+    def _pad_to_same_seq_len(chunks: list[torch.Tensor]) -> list[torch.Tensor]:
+        """
+        Pad all tensors in chunks to the same seq_len (dim 1).
+        Pads on the LEFT with zeros, consistent with left-padding tokenization.
+        Shape: [batch, seq_len, dim] → all padded to max seq_len in the list.
+        """
+        max_seq = max(t.shape[1] for t in chunks)
+        padded = []
+        for t in chunks:
+            pad_len = max_seq - t.shape[1]
+            if pad_len > 0:
+                # F.pad format: (last_dim_right, last_dim_left, ..., first_dim_right, first_dim_left)
+                # We want to pad dim 1 on the left → (0, 0, pad_len, 0)
+                t = torch.nn.functional.pad(t, (0, 0, pad_len, 0))
+            padded.append(t)
+        return padded
+
     # ── Collection ────────────────────────────────────────────────────────────
 
     def collect(
@@ -119,7 +137,10 @@ class ActivationStore:
                 accumulated[key].append(tensor.cpu())  # [batch, seq_len, dim]
 
         # Concatenate across batches → [n_prompts, dim]
-        self._data = {key: torch.cat(chunks, dim=0) for key, chunks in accumulated.items()}
+        self._data = {
+            key: torch.cat(self._pad_to_same_seq_len(chunks), dim=0)
+            for key, chunks in accumulated.items()
+        }
         self._meta = {
             "tag":            tag,
             "mode":           mode,
