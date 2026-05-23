@@ -116,9 +116,7 @@ class ActivationStore:
             # Extract the target token position from each activation
             for key, tensor in acts.items():
                 # tensor shape: [batch, seq_len, dim]
-                # We take position `token_position` → [batch, dim]
-                extracted = tensor[:, token_position, :].cpu()
-                accumulated[key].append(extracted)
+                accumulated[key].append(tensor.cpu())  # [batch, seq_len, dim]
 
         # Concatenate across batches → [n_prompts, dim]
         self._data = {key: torch.cat(chunks, dim=0) for key, chunks in accumulated.items()}

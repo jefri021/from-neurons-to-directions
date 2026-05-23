@@ -39,53 +39,40 @@ from model_utils import HookManager, tokenize, generate, get_num_layers
 # ── 1. Compute refusal direction ──────────────────────────────────────────────
 
 def compute_refusal_direction(
-    harmful_acts:  dict[str, torch.Tensor],
+    harmful_acts:  dict[str, torch.Tensor],   # [n_prompts, seq_len, hidden_size]
     harmless_acts: dict[str, torch.Tensor],
     normalize: bool = True,
-) -> dict[int, torch.Tensor]:
+) -> dict[tuple[int, int], torch.Tensor]:
     """
-    Compute the refusal direction r at each layer using difference-in-means.
-
-    r_l = mean(harmful_acts_l) - mean(harmless_acts_l)
-
-    This is the core of Paper 1 Section 3: the direction that separates
-    the internal representation of harmful vs harmless inputs.
+    Compute refusal direction for every (layer, token_position) pair.
 
     Args:
-        harmful_acts:  dict from ActivationStore, key "residual_{l}"
-                       each tensor shape [n_prompts, hidden_size]
-        harmless_acts: same format, harmless prompts
-        normalize:     if True, return unit vectors (recommended —
-                       makes cosine similarity comparisons meaningful)
+        harmful_acts:  key "residual_{l}" → Tensor[n_prompts, seq_len, hidden_size]
+                       NOTE: full sequence, not last-token-only
+        harmless_acts: same format
 
     Returns:
-        dict mapping layer_idx (int) → direction vector [hidden_size]
-
-    Example:
-        harmful  = ActivationStore.load("results/activations/instruct/harmful_residual.pt")
-        harmless = ActivationStore.load("results/activations/instruct/harmless_residual.pt")
-        directions = compute_refusal_direction(harmful, harmless)
-        r_15 = directions[15]   # unit vector, shape [hidden_size]
+        dict mapping (layer_idx, token_position) → direction vector [hidden_size]
     """
     directions = {}
-
-    # Keys are like "residual_0", "residual_1", ..., "residual_31"
     layer_keys = [k for k in harmful_acts if k.startswith("residual_")]
 
     for key in layer_keys:
         layer_idx = int(key.split("_")[1])
+        harm   = harmful_acts[key].float()    # [n_prompts, seq_len, hidden_size]
+        harmless = harmless_acts[key].float()
 
-        mu_harmful  = harmful_acts[key].float().mean(dim=0)   # [hidden_size]
-        mu_harmless = harmless_acts[key].float().mean(dim=0)  # [hidden_size]
+        seq_len = harm.shape[1]
 
-        r = mu_harmful - mu_harmless                          # [hidden_size]
+        for pos in range(seq_len):
+            mu_harm     = harm[:, pos, :].mean(dim=0)
+            mu_harmless = harmless[:, pos, :].mean(dim=0)
+            r = mu_harm - mu_harmless
+            if normalize:
+                r = F.normalize(r, dim=0)
+            directions[(layer_idx, pos)] = r
 
-        if normalize:
-            r = F.normalize(r, dim=0)
-
-        directions[layer_idx] = r
-
-    print(f"Computed refusal directions for {len(directions)} layers.")
+    print(f"Computed directions for {len(directions)} (layer, position) pairs.")
     return directions
 
 
@@ -133,59 +120,62 @@ def score_direction_at_layer(
     return non_refusals / len(responses)
 
 
-def select_best_layer(
-    directions: dict[int, torch.Tensor],
+def select_best_direction(
+    directions: dict[tuple[int, int], torch.Tensor],
     model,
     tokenizer,
     harmful_prompts: list[str],
     candidate_layers: Optional[list[int]] = None,
+    candidate_positions=None,   # e.g. list(range(-5, 0)) — last 5 tokens
     n_eval: int = 20,
-) -> tuple[int, torch.Tensor]:
+) -> tuple[int, int, torch.Tensor]:
     """
-    Evaluate candidate layers and return the one where ablating r
-    most reduces refusal (i.e. the causally strongest layer).
-
-    This is Paper 1 Section 3's layer-selection procedure.
-
-    Args:
-        directions:       output of compute_refusal_direction()
-        candidate_layers: subset of layers to evaluate.
-                          Default: middle 50% of layers (where refusal
-                          representations tend to form in 8B models).
-        n_eval:           prompts to use for scoring (20 is usually enough)
+    Search all (layer, position) pairs and return the one where
+    ablating r most reduces refusal.
 
     Returns:
-        (best_layer_idx, best_direction_vector)
-
-    Example:
-        best_layer, best_r = select_best_layer(directions, model, tokenizer, harmful_prompts)
-        print(f"Best layer: {best_layer}")
+        (best_layer, best_position, best_direction)
     """
     n_layers = get_num_layers(model)
 
     if candidate_layers is None:
-        # # Middle 50% heuristic — refusal tends to form in mid-to-late layers
-        # lo = n_layers // 4
-        # hi = 3 * n_layers // 4
-        # all layers are included, if no candidate is given
         candidate_layers = list(range(n_layers))
 
-    print(f"Evaluating {len(candidate_layers)} candidate layers with {n_eval} prompts each ...")
+    # Only evaluate a subset of positions to keep it tractable.
+    # Last few positions are most informative for refusal — search -1, -2, -3
+    # plus position 0 (BOS) as a sanity check baseline.
+    # We index from the end: seq_len is unknown here so we use negative indices.
+    # Collect unique positions from the direction keys for candidate layers.
+    
+    if candidate_positions is not None:
+        candidate_keys = [
+            (l, pos) for (l, pos) in directions
+            if l in candidate_layers and pos in candidate_positions
+        ]
+    else:
+        candidate_keys = [
+            (l, pos) for (l, pos) in directions
+            if l in candidate_layers
+        ]
+
+    print(f"Evaluating {len(candidate_keys)} (layer, position) pairs "
+          f"with {n_eval} prompts each ...")
+
     scores = {}
-    for layer_idx in tqdm(candidate_layers):
-        if layer_idx not in directions:
-            continue
+    for (layer_idx, pos) in tqdm(candidate_keys):
         score = score_direction_at_layer(
-            model, tokenizer, directions[layer_idx], layer_idx,
-            harmful_prompts, n_eval=n_eval
+            model, tokenizer, directions[(layer_idx, pos)],
+            layer_idx, harmful_prompts, n_eval=n_eval
         )
-        scores[layer_idx] = score
+        scores[(layer_idx, pos)] = score
 
-    best_layer = max(scores, key=scores.get)
-    print(f"\nLayer scores: { {l: f'{s:.2f}' for l, s in sorted(scores.items())} }")
-    print(f"Best layer: {best_layer} (score={scores[best_layer]:.2f})")
+    best_key = max(scores, key=scores.get)
+    best_layer, best_pos = best_key
 
-    return best_layer, directions[best_layer]
+    print(f"\nBest (layer, position) : {best_key}")
+    print(f"Score                  : {scores[best_key]:.2f}")
+
+    return best_layer, best_pos, directions[best_key]
 
 
 # ── 3. Direction arithmetic ───────────────────────────────────────────────────
