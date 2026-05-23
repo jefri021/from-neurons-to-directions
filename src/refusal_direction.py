@@ -164,10 +164,11 @@ def select_best_layer(
     n_layers = get_num_layers(model)
 
     if candidate_layers is None:
-        # Middle 50% heuristic — refusal tends to form in mid-to-late layers
-        lo = n_layers // 4
-        hi = 3 * n_layers // 4
-        candidate_layers = list(range(lo, hi))
+        # # Middle 50% heuristic — refusal tends to form in mid-to-late layers
+        # lo = n_layers // 4
+        # hi = 3 * n_layers // 4
+        # all layers are included, if no candidate is given
+        candidate_layers = list(range(n_layers))
 
     print(f"Evaluating {len(candidate_layers)} candidate layers with {n_eval} prompts each ...")
     scores = {}
