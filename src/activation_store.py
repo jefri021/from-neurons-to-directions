@@ -56,6 +56,7 @@ class ActivationStore:
         self._meta: dict = {}                       # metadata for the last collect()
 
 
+    @staticmethod
     def _pad_to_same_seq_len(chunks: list[torch.Tensor]) -> list[torch.Tensor]:
         """
         Pad all tensors in chunks to the same seq_len (dim 1).
@@ -138,7 +139,7 @@ class ActivationStore:
 
         # Concatenate across batches → [n_prompts, dim]
         self._data = {
-            key: torch.cat(self._pad_to_same_seq_len(chunks), dim=0)
+            key: torch.cat(ActivationStore._pad_to_same_seq_len(chunks), dim=0)
             for key, chunks in accumulated.items()
         }
         self._meta = {
