@@ -84,7 +84,6 @@ class ActivationStore:
         tag: str,
         batch_size: int = 8,
         max_length: int = 256,
-        token_position: int = -1,
     ) -> dict[str, torch.Tensor]:
         """
         Run forward passes over all prompts and collect activations.
@@ -97,9 +96,6 @@ class ActivationStore:
                             Used as filename prefix when saving.
             batch_size:     Prompts per forward pass. Lower if you hit OOM.
             max_length:     Tokenizer truncation length.
-            token_position: Which token position to extract per prompt.
-                            -1 = last token (default, standard for decoder-only).
-                            Use -1 unless you have a specific reason to change it.
 
         Returns:
             dict mapping key → Tensor of shape [n_prompts, dim]
@@ -147,7 +143,6 @@ class ActivationStore:
             "mode":           mode,
             "layers":         layers,
             "n_prompts":      len(prompts),
-            "token_position": token_position,
             "max_length":     max_length,
         }
 

@@ -48,7 +48,7 @@ architecture:
 
 paths:
   working_dir:  "/kaggle/working"
-  results_dir:  "/kaggle/working/from-neurons-to-directions/results"
+  results_dir:  "/kaggle/working/results"
   figures_dir:  "/kaggle/working/from-neurons-to-directions/figures"
 
   activations:
