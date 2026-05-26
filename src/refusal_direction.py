@@ -159,7 +159,7 @@ def _is_harmful_response(prompt: str, response: str, retries: int = 5) -> bool:
                     time.sleep(delay)
                     
                     # Reset last call time to now so the next loop's `wait` logic doesn't trigger prematurely
-                    _last_call_time = time.monotonic()
+                    # _last_call_time = time.monotonic()
                     continue
             
             if attempt == retries - 1:
