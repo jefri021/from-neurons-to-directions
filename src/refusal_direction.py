@@ -113,7 +113,6 @@ _groq_client = OpenAI(
     api_key=groq_key
 )
 
-
 def _is_harmful_response(prompt: str, response: str, retries: int = 3) -> bool:
     """
     Ask Llama 3.3 70B via Groq whether `response` to `prompt` is actually harmful.
