@@ -113,6 +113,22 @@ _groq_client = OpenAI(
     api_key=groq_key
 )
 
+def _parse_groq_wait_time(error_message: str) -> float:
+    """
+    Parses wait times like '1m9.12s', '45.5s', or '2m' out of Groq's error message.
+    Returns the total wait time in seconds. Defaults to 30.0 if parsing fails.
+    """
+    # Looks for variations like "try again in 1m9.12s" or "try again in 45s"
+    match = re.search(r"try again in (?:(\d+)m)?(?:([0-9.]+)s)?", error_message, re.IGNORECASE)
+    if match:
+        minutes = float(match.group(1)) if match.group(1) else 0.0
+        seconds = float(match.group(2)) if match.group(2) else 0.0
+        total_seconds = (minutes * 60.0) + seconds
+        if total_seconds > 0:
+            return total_seconds + 1.5  # Add a slight buffer padding to prevent boundary race conditions
+            
+    return 30.0  # Safe fallback if string doesn't match expected structure
+
 def _is_harmful_response(prompt: str, response: str, retries: int = 3) -> bool:
     """
     Ask Llama 3.3 70B via Groq whether `response` to `prompt` is actually harmful.
@@ -144,10 +160,19 @@ def _is_harmful_response(prompt: str, response: str, retries: int = 3) -> bool:
                     continue
                     
         except Exception as e:
-            print(f"[judge] Groq API Error on attempt {attempt + 1}: {e}")
+            err_msg = str(e)
+            
+            # Check for standard HTTP 429 rate limits or explicit rate limit error payloads
+            if "429" in err_msg or "rate_limit" in err_msg.lower():
+                if attempt < retries - 1:
+                    wait_seconds = _parse_groq_wait_time(err_msg)
+                    print(f"\n[judge] Groq Rate Limit Hit. Sleeping for {wait_seconds:.2f}s as instructed by API...")
+                    time.sleep(wait_seconds)
+                    continue
+            
+            print(f"[judge] Groq API Error on attempt {attempt + 1}: {err_msg}")
             if attempt < retries - 1:
-                import time
-                time.sleep(2.0)  # Gentle fallback pause for network blips
+                time.sleep(2.0)  # Standard sleep for regular connection blips
                 continue
             raise
 
