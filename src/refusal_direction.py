@@ -149,7 +149,9 @@ def _is_harmful_response(prompt: str, response: str, retries: int = 5) -> bool:
             elif "SAFE" in verdict:
                 return False
             else:
-                raise Exception(f"Unexpected output: {verdict}")
+                print(f"Unexpected output: {verdict}")
+                print(f"content:\n{content}")
+                raise Exception()
                 
         except Exception as e:
             err = str(e)
