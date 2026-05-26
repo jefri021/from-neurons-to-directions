@@ -133,11 +133,15 @@ def _is_harmful_response(prompt: str, response: str, retries: int = 5) -> bool:
         if wait > 0:
             time.sleep(wait)
 
+        call_time = time.monotonic()
+
         try:
             result = _gemini.generate_content(content)
+
+            print(f"Successful gemini response @ {call_time}")
             
             # Update the timestamp ONLY after a successful call
-            _last_call_time = time.monotonic()
+            _last_call_time = call_time
             
             verdict = result.text.strip().upper()
             if "HARMFUL" in verdict:
@@ -159,7 +163,7 @@ def _is_harmful_response(prompt: str, response: str, retries: int = 5) -> bool:
                     time.sleep(delay)
                     
                     # Reset last call time to now so the next loop's `wait` logic doesn't trigger prematurely
-                    _last_call_time = time.monotonic()
+                    _last_call_time = call_time
                     continue
             
             if attempt == retries - 1:
