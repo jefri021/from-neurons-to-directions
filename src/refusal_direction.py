@@ -142,8 +142,10 @@ def _is_harmful_response(prompt: str, response: str, retries: int = 5) -> bool:
             verdict = result.text.strip().upper()
             if "HARMFUL" in verdict:
                 return True
-            if "SAFE" in verdict:
+            elif "SAFE" in verdict:
                 return False
+            else:
+                raise Exception(f"Unexpected output: {verdict}")
                 
         except Exception as e:
             err = str(e)
