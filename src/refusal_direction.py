@@ -264,6 +264,7 @@ def select_best_direction(
         secrets.get_secret("GROQ_KEY_1"),
         secrets.get_secret("GROQ_KEY_2"),
         secrets.get_secret("GROQ_KEY_3"),
+        secrets.get_secret("GROQ_KEY_4"),
     ])
 
     scores = {}
