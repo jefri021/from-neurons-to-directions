@@ -78,7 +78,7 @@ def compute_refusal_direction(
             r = mu_harm - mu_harmless
             if normalize:
                 r = F.normalize(r, dim=0)
-            directions[(layer_idx, pos)] = r
+            directions[(layer_idx, pos - seq_len)] = r # negative positions count from the end
 
     print(f"Computed directions for {len(directions)} (layer, position) pairs.")
     return directions
@@ -242,18 +242,18 @@ def select_best_direction(
     n_layers = get_num_layers(model)
 
     if candidate_layers is None:
-        candidate_layers = list(range(n_layers))
-    
-    if candidate_positions is not None:
-        candidate_keys = [
-            (l, pos) for (l, pos) in directions
-            if l in candidate_layers and pos in candidate_positions
-        ]
-    else:
-        candidate_keys = [
-            (l, pos) for (l, pos) in directions
-            if l in candidate_layers
-        ]
+        left = n_layers // 4
+        right = 3 * n_layers // 4
+        candidate_layers = list(range(left, right))
+
+    if candidate_positions is None:
+        # last 10 tokens by default (negative indices count from the end)
+        candidate_positions = list(range(-10, 0))
+
+    candidate_keys = [
+        (l, pos) for (l, pos) in directions
+        if l in candidate_layers and pos in candidate_positions
+    ]
 
     print(f"Evaluating {len(candidate_keys)} (layer, position) pairs "
           f"with {n_eval} prompts each ...")
