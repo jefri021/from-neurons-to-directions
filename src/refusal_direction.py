@@ -284,7 +284,7 @@ def select_best_direction(
     print(f"\nBest (layer, position) : {best_key}")
     print(f"Score                  : {scores[best_key]:.2f}")
 
-    return best_layer, best_pos, directions[best_key]
+    return best_layer, best_pos, directions[best_key], scores
 
 
 # ── 3. Direction arithmetic ───────────────────────────────────────────────────
