@@ -196,6 +196,7 @@ def score_direction_at_layer(
     tokenizer,
     direction,
     layer_idx: int,
+    token_position: int,
     harmful_prompts: list[str],
     pool: GroqKeyPool,
     n_eval: int = 20,
@@ -212,7 +213,7 @@ def score_direction_at_layer(
     rng = random.Random(seed)
     prompts = rng.sample(harmful_prompts, min(n_eval, len(harmful_prompts)))
 
-    responses = generate_with_ablation(model, tokenizer, prompts, direction, layer_idx)
+    responses = generate_with_ablation(model, tokenizer, prompts, direction, layer_idx, token_position)
 
     workers = max_workers or len(pool._slots)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
@@ -270,7 +271,7 @@ def select_best_direction(
     scores = {}
     for (layer_idx, pos) in tqdm(candidate_keys, desc="Evaluating pairs"):
         score = score_direction_at_layer(
-            model, tokenizer, directions[(layer_idx, pos)], layer_idx,
+            model, tokenizer, directions[(layer_idx, pos)], layer_idx, pos,
             harmful_prompts=harmful_prompts,
             pool=pool,
             n_eval=n_eval,
@@ -346,36 +347,46 @@ def generate_with_ablation(
     prompts: list[str],
     direction: torch.Tensor,
     layer_idx: int,
+    token_position: int,
     max_new_tokens: int = 200,
 ) -> list[str]:
     """
-    Generate responses with the refusal direction ablated at runtime.
+    Generate responses with the refusal direction ablated at a specific
+    (layer, token_position) in the residual stream.
 
-    Registers a forward hook that removes the component along `direction`
-    from the residual stream at `layer_idx` on every forward pass.
-
-    Expected result: model stops refusing harmful prompts.
-    This is Paper 1's core causal intervention.
+    The intervention is applied only during the prefill forward pass
+    (when the full prompt is processed), at the specified token position.
+    Subsequent single-token generation steps are left unmodified.
 
     Args:
-        prompts:    list of input prompts (use harmful prompts to test)
-        direction:  refusal direction unit vector [hidden_size]
-        layer_idx:  layer at which to apply the ablation
-
-    Returns:
-        list of generated response strings
+        direction:       refusal direction unit vector [hidden_size]
+        layer_idx:       layer at which to apply the ablation
+        token_position:  token position to ablate (supports negative indexing)
     """
     hook_handles = []
+    call_counter = {"n": 0}
 
     def ablation_hook(module, input, output):
-        # In newer transformers, layer output may be a plain tensor or a tuple
+        # Only intervene on the first call (prefill with full prompt)
+        # Skip subsequent single-token decoding steps
+        if call_counter["n"] > 0:
+            call_counter["n"] += 1
+            return output
+        call_counter["n"] += 1
+
+        hidden = output[0] if isinstance(output, tuple) else output
+
+        # hidden shape: [batch, seq_len, hidden_size]
+        seq_len = hidden.shape[1]
+        pos = token_position % seq_len          # handle negative indexing
+
+        # Clone to avoid in-place modification of the computation graph
+        hidden = hidden.clone()
+        hidden[:, pos, :] = ablate_direction(hidden[:, pos, :], direction)
+
         if isinstance(output, tuple):
-            hidden = output[0]
-            hidden = ablate_direction(hidden, direction)
             return (hidden,) + output[1:]
-        else:
-            # output is a plain tensor
-            return ablate_direction(output, direction)
+        return hidden
 
     layer = model.model.layers[layer_idx]
     handle = layer.register_forward_hook(ablation_hook)
@@ -396,28 +407,40 @@ def generate_with_addition(
     prompts: list[str],
     direction: torch.Tensor,
     layer_idx: int,
+    token_position: int,
     alpha: float = 20.0,
     max_new_tokens: int = 200,
 ) -> list[str]:
     """
-    Generate responses with the refusal direction added at runtime.
-
-    Expected result: model refuses even harmless prompts.
-    Use harmless prompts as input to test direction sufficiency.
+    Generate responses with the refusal direction added at a specific
+    (layer, token_position) in the residual stream.
 
     Args:
-        prompts:  list of input prompts (use harmless prompts to test)
-        alpha:    injection strength (default 20.0, tune if output is incoherent)
+        direction:       refusal direction unit vector [hidden_size]
+        layer_idx:       layer at which to apply the addition
+        token_position:  token position to inject into (supports negative indexing)
+        alpha:           injection strength
     """
     hook_handles = []
+    call_counter = {"n": 0}
 
     def addition_hook(module, input, output):
+        if call_counter["n"] > 0:
+            call_counter["n"] += 1
+            return output
+        call_counter["n"] += 1
+
+        hidden = output[0] if isinstance(output, tuple) else output
+
+        seq_len = hidden.shape[1]
+        pos = token_position % seq_len
+
+        hidden = hidden.clone()
+        hidden[:, pos, :] = add_direction(hidden[:, pos, :], direction, alpha=alpha)
+
         if isinstance(output, tuple):
-            hidden = output[0]
-            hidden = add_direction(hidden, direction, alpha=alpha)
             return (hidden,) + output[1:]
-        else:
-            return add_direction(output, direction, alpha=alpha)
+        return hidden
 
     layer = model.model.layers[layer_idx]
     handle = layer.register_forward_hook(addition_hook)
@@ -430,7 +453,6 @@ def generate_with_addition(
             h.remove()
 
     return responses
-
 
 # ── 5. Weight-space ablation (permanent jailbreak) ────────────────────────────
 
