@@ -151,6 +151,9 @@ def _parse_groq_wait_time(error_message: str) -> float:
     return 30.0
 
 
+# ── 2. Select best direction ───────────────────────────────────────────────────
+
+
 def _is_harmful_response(
     response: str,
     pool: GroqKeyPool,
@@ -190,31 +193,49 @@ def _is_harmful_response(
     return False  # conservative fallback
 
 
-
-def score_direction_at_layer(
+def score_direction(
     model,
     tokenizer,
-    direction,
-    layer_idx: int,
-    token_position: int,
+    direction: torch.Tensor,
     harmful_prompts: list[str],
     pool: GroqKeyPool,
     n_eval: int = 20,
-    seed: int | None = None,
-    max_workers: int | None = None,  # defaults to len(pool keys)
+    seed: int = 42,
+    max_workers: Optional[int] = None,
 ) -> float:
     """
-    Score a candidate direction by measuring how much ablating it
-    reduces refusal on harmful prompts.
+    Score a candidate direction vector by measuring how much ablating it
+    (across ALL layers and ALL token positions, per Paper 1) causes the
+    model to produce harmful content on harmful prompts.
 
-    Judge calls are issued concurrently, one thread per response,
-    load-balanced across all keys in `pool`.
+    Uses an LLM judge (Groq) instead of keyword matching — more reliable
+    because keyword matching misses compliant responses that don't use
+    standard refusal phrases.
+
+    Score = fraction of responses judged HARMFUL after ablation.
+    Higher score → ablating this direction removes refusal more effectively
+                 → this direction is more causally responsible for refusal.
+
+    Args:
+        direction:       candidate unit vector [hidden_size]
+        harmful_prompts: prompts that normally trigger refusal
+        pool:            GroqKeyPool instance (created once in select_best_direction)
+        n_eval:          number of prompts to evaluate
+        seed:            random seed for prompt sampling
+        max_workers:     parallel judge threads (defaults to number of API keys)
+
+    Returns:
+        float in [0, 1]
     """
-    rng = random.Random(seed)
+    rng     = random.Random(seed)
     prompts = rng.sample(harmful_prompts, min(n_eval, len(harmful_prompts)))
 
-    responses = generate_with_ablation(model, tokenizer, prompts, direction, layer_idx, token_position)
+    # Ablate across ALL layers and ALL positions — per Paper 1 Section 2.4
+    responses = generate_with_ablation(
+        model, tokenizer, prompts, direction
+    )
 
+    # Judge all responses concurrently across available API keys
     workers = max_workers or len(pool._slots)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
@@ -233,33 +254,51 @@ def select_best_direction(
     tokenizer,
     harmful_prompts: list[str],
     candidate_layers: Optional[list[int]] = None,
-    candidate_positions=None,
+    candidate_positions: Optional[list[int]] = None,
     n_eval: int = 20,
-) -> tuple[int, int, torch.Tensor]:
+    seed: int = 42,
+) -> tuple[int, int, torch.Tensor, dict]:
     """
-    Search all (layer, position) pairs and return the one where
-    ablating r most reduces refusal.
+    Search all (layer, position) extraction pairs and return the direction
+    that, when ablated across the whole model, most causes the model to
+    produce harmful content (i.e. most destroys refusal).
+
+    The pool is created once here and reused across all evaluations to
+    avoid re-reading secrets and re-initializing clients on every call.
+
+    Args:
+        directions:          output of compute_refusal_direction_all_positions()
+        candidate_layers:    layers to search (default: middle 50%)
+        candidate_positions: positions to search (default: last 10 tokens)
+                             pass absolute indices matching direction keys
+        n_eval:              prompts per candidate
+        seed:                for reproducible prompt sampling
+
+    Returns:
+        (best_layer, best_position, best_direction, scores_dict)
+        scores_dict maps (layer, pos) → score for all evaluated pairs
     """
     n_layers = get_num_layers(model)
 
     if candidate_layers is None:
-        left = n_layers // 4
-        right = 3 * n_layers // 4
-        candidate_layers = list(range(left, right))
+        lo = n_layers // 4
+        hi = 3 * n_layers // 4
+        candidate_layers = list(range(lo, hi))
 
     if candidate_positions is None:
-        # last 10 tokens by default (negative indices count from the end)
         candidate_positions = list(range(-10, 0))
 
     candidate_keys = [
         (l, pos) for (l, pos) in directions
-        if l in candidate_layers and pos in candidate_positions
+        if l in candidate_layers
+        and pos in candidate_positions
     ]
 
-    print(f"Evaluating {len(candidate_keys)} (layer, position) pairs "
-          f"with {n_eval} prompts each ...")
-    
+    print(f"Evaluating {len(candidate_keys)} (layer, position) pairs | "
+          f"n_eval={n_eval} prompts each")
+    print("Ablation applied across ALL layers per Paper 1 Section 2.4\n")
 
+    # Create the key pool once — reused across all score_direction calls
     secrets = UserSecretsClient()
     pool = GroqKeyPool([
         secrets.get_secret("GROQ_KEY_1"),
@@ -269,23 +308,27 @@ def select_best_direction(
     ])
 
     scores = {}
-    for (layer_idx, pos) in tqdm(candidate_keys, desc="Evaluating pairs"):
-        score = score_direction_at_layer(
-            model, tokenizer, directions[(layer_idx, pos)], layer_idx, pos,
+    for (layer_idx, pos) in tqdm(candidate_keys, desc="Scoring directions"):
+        score = score_direction(
+            model=model,
+            tokenizer=tokenizer,
+            direction=directions[(layer_idx, pos)],
             harmful_prompts=harmful_prompts,
             pool=pool,
             n_eval=n_eval,
-            seed=42,
+            seed=seed,
         )
         scores[(layer_idx, pos)] = score
+        tqdm.write(f"  layer={layer_idx:>2}, pos={pos:>4}: score={score:.2f}")
 
-    best_key = max(scores, key=scores.get)
+    best_key   = max(scores, key=scores.get)
     best_layer, best_pos = best_key
 
-    print(f"\nBest (layer, position) : {best_key}")
-    print(f"Score                  : {scores[best_key]:.2f}")
+    print(f"\nBest extraction point : layer={best_layer}, position={best_pos}")
+    print(f"Score (harmful rate after ablation) : {scores[best_key]:.2f}")
 
     return best_layer, best_pos, directions[best_key], scores
+
 
 
 # ── 3. Direction arithmetic ───────────────────────────────────────────────────
@@ -299,17 +342,14 @@ def ablate_direction(
 
     x' = x - (x · r̂) r̂
 
-    This is Paper 1's directional ablation. Applied to the residual stream,
-    it prevents the model from "writing" refusal into that dimension.
+    Works for any shape [..., hidden_size] — including full residual
+    stream tensors of shape [batch, seq_len, hidden_size].
 
     Args:
-        x:         residual stream tensor [..., hidden_size]
-        direction: unit vector [hidden_size] (will be normalized if not already)
-
-    Returns:
-        tensor of same shape as x
+        x:         tensor [..., hidden_size]
+        direction: unit vector [hidden_size]
     """
-    r = F.normalize(direction.to(x.device, dtype=x.dtype), dim=0)  # ← add dtype=x.dtype
+    r = F.normalize(direction.to(x.device, dtype=x.dtype), dim=0)
     return x - (x @ r).unsqueeze(-1) * r
 
 
@@ -323,19 +363,14 @@ def add_direction(
 
     x' = x + alpha * r̂
 
-    This is Paper 1's activation addition. Applied to the residual stream,
-    it pushes the model toward refusal even on harmless prompts.
+    Works for any shape [..., hidden_size] via broadcasting.
 
     Args:
-        x:         residual stream tensor [..., hidden_size]
+        x:         tensor [..., hidden_size]
         direction: unit vector [hidden_size]
-        alpha:     scale factor. Paper 1 uses values around 15–30.
-                   Too large → incoherent output. Start with 20 and tune.
-
-    Returns:
-        tensor of same shape as x
+        alpha:     scale factor (~15–30, tune if output is incoherent)
     """
-    r = F.normalize(direction.to(x.device, dtype=x.dtype), dim=0)  # ← add dtype=x.dtype
+    r = F.normalize(direction.to(x.device, dtype=x.dtype), dim=0)
     return x + alpha * r
 
 
@@ -346,51 +381,39 @@ def generate_with_ablation(
     tokenizer,
     prompts: list[str],
     direction: torch.Tensor,
-    layer_idx: int,
-    token_position: int,
     max_new_tokens: int = 200,
 ) -> list[str]:
     """
-    Generate responses with the refusal direction ablated at a specific
-    (layer, token_position) in the residual stream.
+    Generate with the refusal direction ablated across ALL layers and
+    ALL token positions — exactly as described in Paper 1 Section 2.4.
 
-    The intervention is applied only during the prefill forward pass
-    (when the full prompt is processed), at the specified token position.
-    Subsequent single-token generation steps are left unmodified.
+    For every residual stream activation x at every layer and every
+    token position:
+        x' ← x - r̂ r̂ᵀ x
+
+    This prevents the model from ever representing the refusal direction
+    anywhere in its computation.
 
     Args:
-        direction:       refusal direction unit vector [hidden_size]
-        layer_idx:       layer at which to apply the ablation
-        token_position:  token position to ablate (supports negative indexing)
+        direction: refusal direction unit vector [hidden_size].
+                   Extracted from a specific (layer, position) pair via
+                   difference-in-means, but APPLIED everywhere.
+        prompts:   use harmful prompts — expected result is refusal disappears
     """
     hook_handles = []
-    call_counter = {"n": 0}
 
     def ablation_hook(module, input, output):
-        # Only intervene on the first call (prefill with full prompt)
-        # Skip subsequent single-token decoding steps
-        if call_counter["n"] > 0:
-            call_counter["n"] += 1
-            return output
-        call_counter["n"] += 1
-
+        # Apply to the full hidden state: [batch, seq_len, hidden_size]
         hidden = output[0] if isinstance(output, tuple) else output
-
-        # hidden shape: [batch, seq_len, hidden_size]
-        seq_len = hidden.shape[1]
-        pos = token_position % seq_len          # handle negative indexing
-
-        # Clone to avoid in-place modification of the computation graph
-        hidden = hidden.clone()
-        hidden[:, pos, :] = ablate_direction(hidden[:, pos, :], direction)
-
+        hidden = ablate_direction(hidden, direction)
         if isinstance(output, tuple):
             return (hidden,) + output[1:]
         return hidden
 
-    layer = model.model.layers[layer_idx]
-    handle = layer.register_forward_hook(ablation_hook)
-    hook_handles.append(handle)
+    # Register on ALL layers
+    for layer in model.model.layers:
+        handle = layer.register_forward_hook(ablation_hook)
+        hook_handles.append(handle)
 
     try:
         responses = generate(model, tokenizer, prompts, max_new_tokens=max_new_tokens)
@@ -407,41 +430,37 @@ def generate_with_addition(
     prompts: list[str],
     direction: torch.Tensor,
     layer_idx: int,
-    token_position: int,
     alpha: float = 20.0,
     max_new_tokens: int = 200,
 ) -> list[str]:
     """
-    Generate responses with the refusal direction added at a specific
-    (layer, token_position) in the residual stream.
+    Generate with the refusal direction added at ONE layer, across ALL
+    token positions — exactly as described in Paper 1 Section 2.4.
+
+    At layer layer_idx, for every token position:
+        x' ← x + r^(l)
+
+    This shifts the model's representations at that layer toward the
+    harmful/refusal region for every token simultaneously.
 
     Args:
-        direction:       refusal direction unit vector [hidden_size]
-        layer_idx:       layer at which to apply the addition
-        token_position:  token position to inject into (supports negative indexing)
-        alpha:           injection strength
+        direction:  refusal direction unit vector [hidden_size]
+        layer_idx:  the layer at which to inject — should be the best
+                    layer found by select_best_direction()
+        alpha:      injection strength (default 20.0)
+        prompts:    use harmless prompts — expected result is model refuses
     """
     hook_handles = []
-    call_counter = {"n": 0}
 
     def addition_hook(module, input, output):
-        if call_counter["n"] > 0:
-            call_counter["n"] += 1
-            return output
-        call_counter["n"] += 1
-
+        # Apply to all token positions: [batch, seq_len, hidden_size]
         hidden = output[0] if isinstance(output, tuple) else output
-
-        seq_len = hidden.shape[1]
-        pos = token_position % seq_len
-
-        hidden = hidden.clone()
-        hidden[:, pos, :] = add_direction(hidden[:, pos, :], direction, alpha=alpha)
-
+        hidden = add_direction(hidden, direction, alpha=alpha)
         if isinstance(output, tuple):
             return (hidden,) + output[1:]
         return hidden
 
+    # Register on ONE layer only
     layer = model.model.layers[layer_idx]
     handle = layer.register_forward_hook(addition_hook)
     hook_handles.append(handle)
