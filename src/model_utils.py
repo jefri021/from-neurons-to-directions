@@ -20,6 +20,8 @@ from contextlib import contextmanager
 PATHS = {
     "base":     "/kaggle/input/models/metaresearch/llama-3.2/transformers/3b/1",
     "instruct": "/kaggle/input/models/metaresearch/llama-3.2/transformers/3b-instruct/1",
+    "qwen_base": "/kaggle/input/qwen2.5/transformers/7b/1",
+    "qwen_instruct": "/kaggle/input/qwen2.5/transformers/7b-instruct/1",
 }
 
 
