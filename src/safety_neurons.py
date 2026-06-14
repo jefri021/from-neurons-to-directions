@@ -48,64 +48,123 @@ from model_utils import HookManager, tokenize, generate, get_model_device
 
 # ── 1. Activation contrasting ─────────────────────────────────────────────────
 
-def compute_change_scores(
-    base_acts:     dict[str, torch.Tensor],
-    instruct_acts: dict[str, torch.Tensor],
-    method: str = "mean_diff",
-) -> dict[int, torch.Tensor]:
+def collect_generated_span_activations(
+    model,
+    tokenizer,
+    prompts_raw: list[str],
+    completions: list[str],
+    layers: list[int],
+    save_path: str,
+    batch_size: int = 4,
+    max_length: int = 512,
+):
     """
-    Score every neuron by how much its activation changed after alignment.
+    Collect neuron activations at the GENERATED-TOKEN positions only,
+    per Paper 2 Section 3.1: positions [|w|, |w̄^1|-1].
 
-    This is Paper 2's "activation contrasting" (Section 3.1).
-    The intuition: neurons that changed most between base and instruct
-    are the candidates responsible for safety behavior.
-
-    Both activation dicts must be collected on the SAME prompts
-    (run both models on identical inputs so differences come from the
-    model, not from different outputs).
+    Run once per model (base, then instruct) on the SAME prompts_raw +
+    completions, so tokenization is identical and per-prompt activation
+    tensors line up 1:1 between the two passes.
 
     Args:
-        base_acts:     neuron activations from base model
-                       key "neurons_{l}" → Tensor[n_prompts, intermediate_size]
-        instruct_acts: same format, from instruct model, same prompts
-        method:        scoring method —
-                       "mean_diff"  : |mean(instruct) - mean(base)|
-                                      fast, matches Paper 2's approach
-                       "abs_mean"   : mean(|instruct - base|) per neuron
-                                      captures per-sample variance too
+        prompts_raw: prompts w (e.g. format_for_base(...) outputs — the
+                     SAME text used to generate `completions`)
+        completions: M1's (base model's) generations w^1, same order
+        layers:      which layers to hook
+        save_path:   .pt file to write results to
+
+    Saves:
+        {"per_layer_chunks": {l: [Tensor[n_gen_b, intermediate], ...]},
+         "total_gen_tokens": int}
+    """
+    hook_mgr = HookManager(model)
+    per_layer_chunks = {l: [] for l in layers}
+    total_gen_tokens = 0
+
+    full_texts = [p + c for p, c in zip(prompts_raw, completions)]
+
+    for batch_start in tqdm(range(0, len(full_texts), batch_size)):
+        batch_prompts = prompts_raw[batch_start:batch_start + batch_size]
+        batch_texts   = full_texts[batch_start:batch_start + batch_size]
+
+        # |w| for each example — tokenize prompt alone, same special-token
+        # handling as the full-text tokenization below
+        prompt_lens = [
+            len(tokenizer(p, add_special_tokens=True)["input_ids"])
+            for p in batch_prompts
+        ]
+
+        inputs    = tokenize(batch_texts, tokenizer, model, max_length=max_length)
+        attn_mask = inputs["attention_mask"]                     # [batch, seq_len]
+        seq_len   = attn_mask.shape[1]
+        # Left-padding → number of pad tokens prepended to each example
+        pad_lens  = (attn_mask == 0).sum(dim=1).tolist()
+
+        with hook_mgr.record(layers=layers, mode="neurons"):
+            with torch.no_grad():
+                model(**inputs)
+        acts = hook_mgr.get_activations()  # {"neurons_l": [batch, seq_len, intermediate]}
+
+        for b in range(len(batch_prompts)):
+            gen_start = pad_lens[b] + prompt_lens[b]
+            gen_end   = seq_len   # under left-padding, content runs to the end
+
+            if gen_start >= gen_end:
+                continue  # no generated tokens (e.g. completion fully truncated)
+
+            total_gen_tokens += (gen_end - gen_start)
+            for l in layers:
+                a = acts[f"neurons_{l}"][b, gen_start:gen_end, :]  # [n_gen_b, intermediate]
+                per_layer_chunks[l].append(a.cpu())
+
+    torch.save(
+        {"per_layer_chunks": per_layer_chunks, "total_gen_tokens": total_gen_tokens},
+        save_path,
+    )
+    print(f"Saved generated-span activations → {save_path}")
+    print(f"  Total generated tokens: {total_gen_tokens}")
+
+
+def compute_change_scores_rms(
+    base_activations_path: str,
+    instruct_activations_path: str,
+    layers: list[int],
+) -> dict[int, torch.Tensor]:
+    """
+    Compute S_i^{(l)} exactly per Paper 2 Section 3.1:
+
+        S_i^{(l)} = sqrt( Σ_{w,j} (a_i(M1)[j] - a_i(M2)[j])²  /  Σ_w |w^1| )
+
+    Reads the generated-span activations saved by
+    collect_generated_span_activations() for M1 (base) and M2 (instruct).
 
     Returns:
         dict mapping layer_idx → Tensor[intermediate_size]
-        (one score per neuron, higher = more changed by alignment)
-
-    Example:
-        scores = compute_change_scores(base_acts, instruct_acts)
-        scores[15]         # shape [14336] — one score per neuron in layer 15
-        scores[15].argmax()  # index of most-changed neuron in layer 15
     """
+    base_data  = torch.load(base_activations_path,     map_location="cpu")
+    instr_data = torch.load(instruct_activations_path, map_location="cpu")
+
+    assert base_data["total_gen_tokens"] == instr_data["total_gen_tokens"], \
+        "Token counts differ — tokenization wasn't identical across the two passes."
+
+    total_tokens = base_data["total_gen_tokens"]
     scores = {}
-    layer_keys = [k for k in base_acts if k.startswith("neurons_")]
 
-    for key in layer_keys:
-        layer_idx = int(key.split("_")[1])
+    for l in layers:
+        base_chunks  = base_data["per_layer_chunks"][l]
+        instr_chunks = instr_data["per_layer_chunks"][l]
+        assert len(base_chunks) == len(instr_chunks), f"Prompt count mismatch at layer {l}"
 
-        base    = base_acts[key].float()      # [n_prompts, intermediate_size]
-        instruct = instruct_acts[key].float() # [n_prompts, intermediate_size]
+        sq_diff_sum = None
+        for a_base, a_instr in zip(base_chunks, instr_chunks):
+            diff_sq = (a_base.float() - a_instr.float()) ** 2  # [n_gen_b, intermediate]
+            summed  = diff_sq.sum(dim=0)                        # [intermediate]
+            sq_diff_sum = summed if sq_diff_sum is None else sq_diff_sum + summed
 
-        if method == "mean_diff":
-            # Difference of means — one score per neuron
-            score = (instruct.mean(dim=0) - base.mean(dim=0)).abs()
+        scores[l] = torch.sqrt(sq_diff_sum / total_tokens)      # [intermediate]
 
-        elif method == "abs_mean":
-            # Mean of per-sample absolute differences
-            score = (instruct - base).abs().mean(dim=0)
-
-        else:
-            raise ValueError(f"Unknown method '{method}'. Choose: mean_diff, abs_mean")
-
-        scores[layer_idx] = score  # [intermediate_size]
-
-    print(f"Computed change scores for {len(scores)} layers.")
+    print(f"RMS change scores computed for {len(scores)} layers "
+          f"over {total_tokens} generated tokens.")
     return scores
 
 
