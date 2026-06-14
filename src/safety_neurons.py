@@ -103,7 +103,7 @@ def collect_generated_span_activations(
         with hook_mgr.record(layers=layers, mode="neurons"):
             with torch.no_grad():
                 model(**inputs)
-        acts = hook_mgr.get_activations()  # {"neurons_l": [batch, seq_len, intermediate]}
+            acts = hook_mgr.get_activations()  # {"neurons_l": [batch, seq_len, intermediate]}
 
         for b in range(len(batch_prompts)):
             gen_start = pad_lens[b] + prompt_lens[b]
