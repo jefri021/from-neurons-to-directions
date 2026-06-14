@@ -278,6 +278,7 @@ def generate(
     tokenizer,
     prompts: list[str],
     max_new_tokens: int = 200,
+    batch_size: int | None = None,
 ) -> list[str]:
     """
     Generate responses for a list of prompts.
@@ -285,22 +286,36 @@ def generate(
 
     Returns decoded response strings with the prompt stripped.
     """
-    inputs    = tokenize(prompts, tokenizer, model)
-    input_len = inputs["input_ids"].shape[1]
+    # If no batch_size is provided, process everything in a single batch
+    if batch_size is None or batch_size <= 0:
+        batch_size = len(prompts)
 
-    with torch.no_grad():
-        output_ids = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,               # greedy — deterministic, good for evals
-            pad_token_id=tokenizer.pad_token_id,
+    all_decoded_responses = []
+
+    # Process the prompts in chunks
+    for i in range(0, len(prompts), batch_size):
+        batch_prompts = prompts[i : i + batch_size]
+        
+        inputs    = tokenize(batch_prompts, tokenizer, model)
+        input_len = inputs["input_ids"].shape[1]
+
+        with torch.no_grad():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,               # greedy — deterministic, good for evals
+                pad_token_id=tokenizer.pad_token_id,
+            )
+
+        # Decode only newly generated tokens (skip the prompt)
+        batch_responses = tokenizer.batch_decode(
+            output_ids[:, input_len:],
+            skip_special_tokens=True,
         )
+        
+        all_decoded_responses.extend(batch_responses)
 
-    # Decode only newly generated tokens (skip the prompt)
-    return tokenizer.batch_decode(
-        output_ids[:, input_len:],
-        skip_special_tokens=True,
-    )
+    return all_decoded_responses
 
 
 # ── Model introspection ───────────────────────────────────────────────────────
