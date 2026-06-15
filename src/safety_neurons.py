@@ -306,19 +306,17 @@ def dynamic_activation_patching(
                 cached = instruct_cache[layer_idx]
 
                 def make_patch_hook(l_idx, n_indices, cached_acts):
-                    def hook(module, input, output):
-                        # Patch only the selected neuron indices
-                        # input[0]: [batch, seq, intermediate_size]
+                    def hook(module, input):
+                        # input is a tuple; input[0]: [batch, seq, intermediate_size]
                         patched = input[0].clone()
-                        # Align seq lengths (instruct may tokenize differently)
                         seq_len = min(patched.shape[1], cached_acts.shape[1])
                         patched[:, :seq_len, n_indices] = (
                             cached_acts[:, :seq_len, n_indices]
                             .to(patched.device)
                         )
-                        # Return modified input; output is recomputed via down_proj
-                        # We need to re-run down_proj manually with patched input
-                        return module(patched)
+                        # Return the modified input as a tuple — pre-hooks return
+                        # the new args to pass to the module, not the module's output
+                        return (patched,)
                     return hook
 
                 h = mlp.down_proj.register_forward_pre_hook(
