@@ -264,27 +264,29 @@ def dynamic_activation_patching(
 
     all_responses = []
 
-    for prompt in tqdm(prompts, desc="Patched generation"):
+    instruct_cache: dict[tuple, torch.Tensor] = {}
+
+    for i, prompt in enumerate(tqdm(prompts, desc="Patched generation")):
         inputs = tokenize([prompt], tokenizer, base_model)
         input_ids = inputs["input_ids"]
         generated = input_ids.clone()
 
-        for _ in range(max_new_tokens):
+        for t in range(max_new_tokens):
             # ── Step 1: run instruct_model, cache safety neuron activations ──
-            instruct_cache: dict[int, torch.Tensor] = {}
+            # instruct_cache: dict[int, torch.Tensor] = {}
             instruct_hooks = []
 
             for layer_idx, neuron_indices in neurons_by_layer.items():
                 mlp = instruct_model.model.layers[layer_idx].mlp
 
-                def make_instruct_hook(l_idx, n_indices):
+                def make_instruct_hook(i, t, l_idx, n_indices):
                     def hook(module, input, output):
                         # input[0] is the pre-down-proj activation [1, seq, intermediate]
-                        instruct_cache[l_idx] = input[0].detach()
+                        instruct_cache[(i, t, l_idx)] = input[0].detach()
                     return hook
 
                 h = mlp.down_proj.register_forward_hook(
-                    make_instruct_hook(layer_idx, neuron_indices)
+                    make_instruct_hook(i, t, layer_idx, neuron_indices)
                 )
                 instruct_hooks.append(h)
 
@@ -293,19 +295,46 @@ def dynamic_activation_patching(
                 tokenizer, instruct_model
             )
             with torch.no_grad():
-                instruct_model(**instruct_inputs)
+                out = instruct_model(**instruct_inputs)
 
             for h in instruct_hooks:
                 h.remove()
+
+            # TODO assume instruct model generates same as base model, predict next token and append to generated
+
+            next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            generated  = torch.cat([generated, next_token], dim=1)
+
+            # Stop at EOS
+            if next_token.item() == tokenizer.eos_token_id:
+                break
+
+    print(f"Cuda memory before shitty removal: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+    instruct_model.to('cpu')
+    del instruct_model
+
+    import gc
+    gc.collect()
+
+    torch.cuda.empty_cache()
+    print(f"Cuda memory after shitty removal: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
+
+    for i, prompt in enumerate(tqdm(prompts, desc="Patched generation")):
+        inputs = tokenize([prompt], tokenizer, base_model)
+        input_ids = inputs["input_ids"]
+        generated = input_ids.clone()
+
+        for t in range(max_new_tokens):
 
             # ── Step 2 & 3: run base_model, patch safety neurons ─────────────
             base_hooks = []
 
             for layer_idx, neuron_indices in neurons_by_layer.items():
-                if layer_idx not in instruct_cache:
+                if (i, t, layer_idx) not in instruct_cache:
                     continue
                 mlp = base_model.model.layers[layer_idx].mlp
-                cached = instruct_cache[layer_idx]
+                cached = instruct_cache[(i, t, layer_idx)]
 
                 def make_patch_hook(l_idx, n_indices, cached_acts):
                     def hook(module, input):
