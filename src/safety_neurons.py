@@ -43,7 +43,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from typing import Optional
 
-from model_utils import HookManager, tokenize, generate, get_model_device, get_intermediate_size, get_num_layers
+from model_utils import HookManager, tokenize, generate, get_model_device, get_intermediate_size, get_num_layers, load_model_and_tokenizer
 
 
 # ── 1. Activation contrasting ─────────────────────────────────────────────────
@@ -255,8 +255,6 @@ def dynamic_activation_patching(
         This is slow — two forward passes per token per prompt.
         Use small batches (1–4) and short max_new_tokens (50–100) for eval.
     """
-    validate_neuron_indices(safety_neurons, base_model)
-    validate_neuron_indices(safety_neurons, instruct_model)
     # Group neurons by layer for efficient hook lookup
     neurons_by_layer: dict[int, list[int]] = {}
     for layer_idx, neuron_idx in safety_neurons:
@@ -267,7 +265,7 @@ def dynamic_activation_patching(
     instruct_cache: dict[tuple, torch.Tensor] = {}
 
     for i, prompt in enumerate(tqdm(prompts, desc="Patched generation")):
-        inputs = tokenize([prompt], tokenizer, base_model)
+        inputs = tokenize([prompt], tokenizer, instruct_model) # TODO previously was base_model
         input_ids = inputs["input_ids"]
         generated = input_ids.clone()
 
@@ -319,6 +317,7 @@ def dynamic_activation_patching(
     torch.cuda.empty_cache()
     print(f"Cuda memory after shitty removal: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
 
+    base_model, base_tokenizer = load_model_and_tokenizer("qwen_base")
 
     for i, prompt in enumerate(tqdm(prompts, desc="Patched generation")):
         inputs = tokenize([prompt], tokenizer, base_model)
