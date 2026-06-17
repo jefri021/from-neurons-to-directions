@@ -43,7 +43,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from typing import Optional
 
-from model_utils import HookManager, tokenize, generate, get_model_device
+from model_utils import HookManager, tokenize, generate, get_model_device, get_intermediate_size, get_num_layers
 
 
 # ── 1. Activation contrasting ─────────────────────────────────────────────────
@@ -255,6 +255,8 @@ def dynamic_activation_patching(
         This is slow — two forward passes per token per prompt.
         Use small batches (1–4) and short max_new_tokens (50–100) for eval.
     """
+    validate_neuron_indices(safety_neurons, base_model)
+    validate_neuron_indices(safety_neurons, instruct_model)
     # Group neurons by layer for efficient hook lookup
     neurons_by_layer: dict[int, list[int]] = {}
     for layer_idx, neuron_idx in safety_neurons:
@@ -555,3 +557,32 @@ def collect_activations_with_neuron_ablation(
 
     # Extract last token position → [n_prompts, hidden_size]
     return {key: tensor[:, -1, :].cpu() for key, tensor in acts.items()}
+
+
+def validate_neuron_indices(safety_neurons: list[tuple[int, int]], model):
+    """
+    Sanity-check that every (layer_idx, neuron_idx) pair is valid for the
+    CURRENTLY loaded model, before any GPU operation touches them.
+
+    Catches the case where `scores`/`top_neurons` were computed against a
+    different model checkpoint or architecture (different intermediate_size
+    or layer count) — a mismatch here causes out-of-bounds CUDA indexing,
+    which often surfaces as a cryptic "unspecified launch failure" or
+    "illegal memory access" much later, in an unrelated kernel.
+    """
+    n_layers = get_num_layers(model)
+    intermediate_size = get_intermediate_size(model)
+
+    bad_layers  = [l for l, n in safety_neurons if not (0 <= l < n_layers)]
+    bad_neurons = [n for l, n in safety_neurons if not (0 <= n < intermediate_size)]
+
+    if bad_layers or bad_neurons:
+        raise ValueError(
+            f"Invalid neuron indices for current model "
+            f"(n_layers={n_layers}, intermediate_size={intermediate_size}).\n"
+            f"  Out-of-range layers : {sorted(set(bad_layers))[:10]}\n"
+            f"  Out-of-range neurons: {sorted(set(bad_neurons))[:10]}\n"
+            f"This usually means `scores`/`top_neurons` were computed on a "
+            f"different model checkpoint than the one currently loaded. "
+            f"Recompute compute_change_scores_rms() against this model."
+        )
