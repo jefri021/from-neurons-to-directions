@@ -279,8 +279,9 @@ def dynamic_activation_patching(
 
                 def make_instruct_hook(i, t, l_idx, n_indices):
                     def hook(module, input, output):
-                        # input[0] is the pre-down-proj activation [1, seq, intermediate]
-                        instruct_cache[(i, t, l_idx)] = input[0].detach()
+                        # Only store the neuron slice, and on CPU
+                        # Shape: [1, seq_len, len(n_indices)] instead of [1, seq_len, 18944]
+                        instruct_cache[(i, t, l_idx)] = input[0][:, :, n_indices].detach().cpu()
                     return hook
 
                 h = mlp.down_proj.register_forward_hook(
@@ -337,15 +338,12 @@ def dynamic_activation_patching(
 
                 def make_patch_hook(l_idx, n_indices, cached_acts):
                     def hook(module, input):
-                        # input is a tuple; input[0]: [batch, seq, intermediate_size]
                         patched = input[0].clone()
                         seq_len = min(patched.shape[1], cached_acts.shape[1])
                         patched[:, :seq_len, n_indices] = (
-                            cached_acts[:, :seq_len, n_indices]
+                            cached_acts[:, :seq_len, :]  # already sliced — no n_indices on source
                             .to(patched.device)
                         )
-                        # Return the modified input as a tuple — pre-hooks return
-                        # the new args to pass to the module, not the module's output
                         return (patched,)
                     return hook
 
