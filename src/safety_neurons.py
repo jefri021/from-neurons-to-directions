@@ -262,7 +262,6 @@ def dynamic_activation_patching(
 
     all_responses = []
 
-    
 
     for prompt in tqdm(prompts, desc="Patched generation"):
         inputs = tokenize([prompt], tokenizer, instruct_model) # TODO previously was base_model
@@ -274,6 +273,7 @@ def dynamic_activation_patching(
             # instruct_cache: dict[int, torch.Tensor] = {}
             instruct_hooks = []
             instruct_cache: dict[int, torch.Tensor] = {}
+
 
             for layer_idx, neuron_indices in neurons_by_layer.items():
                 mlp = instruct_model.model.layers[layer_idx].mlp
@@ -390,7 +390,7 @@ def compute_causal_effect(
 
     # Baseline: full instruct model
     print("Evaluating full instruct model (baseline) ...")
-    instruct_responses = generate(instruct_model, tokenizer, prompts)
+    instruct_responses = generate(instruct_model, tokenizer, prompts, batch_size=1, max_new_tokens=100)
     baseline_rate = refusal_rate(instruct_responses)
 
     # Patched: base model with safety neurons injected
