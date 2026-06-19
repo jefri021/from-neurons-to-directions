@@ -30,7 +30,7 @@ PATHS = {
 
 def load_model_and_tokenizer(
     model_key: str,
-    torch_dtype: torch.dtype = torch.bfloat16,
+    dtype: torch.dtype = torch.bfloat16,
     device_map: str | dict = "auto",
     quantization_config: BitsAndBytesConfig | None = None,
 ) -> tuple:
@@ -68,7 +68,7 @@ def load_model_and_tokenizer(
 
     model = AutoModelForCausalLM.from_pretrained(
         path,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=device_map,
         quantization_config=quantization_config,
     )
