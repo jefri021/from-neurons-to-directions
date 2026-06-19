@@ -11,7 +11,7 @@ All other src/ modules import from here.
 """
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from contextlib import contextmanager
 
 
@@ -30,23 +30,30 @@ PATHS = {
 
 def load_model_and_tokenizer(
     model_key: str,
-    dtype: torch.dtype = torch.bfloat16,
+    torch_dtype: torch.dtype = torch.bfloat16,
+    device_map: str | dict = "auto",
+    quantization_config: BitsAndBytesConfig | None = None,
 ) -> tuple:
     """
     Load a model and tokenizer from Kaggle input space.
 
-    Uses device_map="auto" so HuggingFace distributes layers across
-    whatever GPUs (or CPU) are available — no manual device management needed.
-
     Args:
-        model_key:  "base" or "instruct"
-        dtype:      bfloat16 recommended for 8B on a single GPU
+        model_key:            "qwen_base" or "qwen_instruct"
+        torch_dtype:          bfloat16 recommended; ignored when using 4-bit quant
+                              (dtype is set via BitsAndBytesConfig.bnb_4bit_compute_dtype)
+        device_map:           "auto" distributes across available GPUs automatically.
+                              Pass {"": 0} or {"": 1} to pin to a specific GPU.
+        quantization_config:  e.g. BitsAndBytesConfig(load_in_8bit=True)
+                              Requires device_map to be set (not None).
 
     Returns:
         (model, tokenizer)
 
     Example:
-        model, tokenizer = load_model_and_tokenizer("base")
+        bnb = BitsAndBytesConfig(load_in_8bit=True)
+        base_model, base_tok = load_model_and_tokenizer(
+            "qwen_base", quantization_config=bnb, device_map={"": 0}
+        )
     """
     if model_key not in PATHS:
         raise ValueError(f"Unknown model key '{model_key}'. Choose from: {list(PATHS)}")
@@ -61,13 +68,14 @@ def load_model_and_tokenizer(
 
     model = AutoModelForCausalLM.from_pretrained(
         path,
-        dtype=dtype,
-        device_map="auto",  # handles single/multi-GPU and CPU offload automatically
+        torch_dtype=torch_dtype,
+        device_map=device_map,
+        quantization_config=quantization_config,
     )
     model.eval()
 
     n_params = sum(p.numel() for p in model.parameters()) / 1e9
-    devices   = set(str(p.device) for p in model.parameters())
+    devices   = {str(p.device) for p in model.parameters()}
     print(f"  {n_params:.1f}B parameters | devices: {devices}")
     return model, tokenizer
 

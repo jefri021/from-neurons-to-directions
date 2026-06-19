@@ -264,7 +264,7 @@ def dynamic_activation_patching(
 
 
     for prompt in tqdm(prompts, desc="Patched generation"):
-        inputs = tokenize([prompt], tokenizer, instruct_model) # TODO previously was base_model
+        inputs = tokenize([prompt], tokenizer, base_model)
         input_ids = inputs["input_ids"]
         generated = input_ids.clone()
 
@@ -390,7 +390,7 @@ def compute_causal_effect(
 
     # Baseline: full instruct model
     print("Evaluating full instruct model (baseline) ...")
-    instruct_responses = generate(instruct_model, tokenizer, prompts, batch_size=1, max_new_tokens=100)
+    instruct_responses = generate(instruct_model, tokenizer, prompts, max_new_tokens=100)
     baseline_rate = refusal_rate(instruct_responses)
 
     # Patched: base model with safety neurons injected
