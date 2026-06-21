@@ -265,23 +265,38 @@ def dynamic_activation_patching(
 
     for prompt in tqdm(prompts, desc="Patched generation"):
         inputs = tokenize([prompt], tokenizer, base_model)
-        input_ids = inputs["input_ids"]
+        input_ids = inputs["input_ids"]          # on base_model.device
         generated = input_ids.clone()
 
+        # NEW: one KV cache per model, reset at the start of each prompt
+        base_past = None
+        instruct_past = None
+
         for _ in range(max_new_tokens):
+            # NEW: on the first step (empty cache) feed the full prompt;
+            # every step after that, feed only the last sampled token
+            if base_past is None:
+                step_tokens_base = generated
+            else:
+                step_tokens_base = generated[:, -1:]
+            step_tokens_instruct = step_tokens_base.to(instruct_model.device)
+
+            # NEW: attention_mask must cover the FULL sequence so far (past + new),
+            # not just the new tokens. Both models track the same cumulative
+            # length since they're locked to the same `generated` tensor.
+            cur_len = generated.shape[1]
+            attn_mask_base     = torch.ones((1, cur_len), dtype=torch.long, device=base_model.device)
+            attn_mask_instruct = torch.ones((1, cur_len), dtype=torch.long, device=instruct_model.device)
+
             # ── Step 1: run instruct_model, cache safety neuron activations ──
-            # instruct_cache: dict[int, torch.Tensor] = {}
             instruct_hooks = []
             instruct_cache: dict[int, torch.Tensor] = {}
-
 
             for layer_idx, neuron_indices in neurons_by_layer.items():
                 mlp = instruct_model.model.layers[layer_idx].mlp
 
                 def make_instruct_hook(l_idx, n_indices):
                     def hook(module, input, output):
-                        # Only store the neuron slice, and on CPU
-                        # Shape: [1, seq_len, len(n_indices)] instead of [1, seq_len, 18944]
                         instruct_cache[l_idx] = input[0][:, :, n_indices].detach().cpu()
                     return hook
 
@@ -290,12 +305,15 @@ def dynamic_activation_patching(
                 )
                 instruct_hooks.append(h)
 
-            instruct_inputs = tokenize(
-                [tokenizer.decode(generated[0], skip_special_tokens=True)],
-                tokenizer, instruct_model
-            )
+            # CHANGED: feed only the new tokens + cache, no more decode/retokenize roundtrip
             with torch.no_grad():
-                instruct_model(**instruct_inputs)
+                instruct_out = instruct_model(
+                    input_ids=step_tokens_instruct,
+                    attention_mask=attn_mask_instruct,
+                    past_key_values=instruct_past,
+                    use_cache=True,
+                )
+            instruct_past = instruct_out.past_key_values   # NEW: carry cache to next step
 
             for h in instruct_hooks:
                 h.remove()
@@ -312,11 +330,12 @@ def dynamic_activation_patching(
                 def make_patch_hook(l_idx, n_indices, cached_acts):
                     def hook(module, input):
                         patched = input[0].clone()
-                        seq_len = min(patched.shape[1], cached_acts.shape[1])
-                        patched[:, :seq_len, n_indices] = (
-                            cached_acts[:, :seq_len, :]  # already sliced — no n_indices on source
-                            .to(patched.device)
-                        )
+                        # CHANGED: both models now process the same number of new
+                        # tokens every step, so shapes match exactly — no more
+                        # seq_len clamping. Assert instead, to catch real bugs.
+                        assert patched.shape[1] == cached_acts.shape[1], \
+                            f"shape mismatch at layer {l_idx}: {patched.shape[1]} vs {cached_acts.shape[1]}"
+                        patched[:, :, n_indices] = cached_acts.to(patched.device)
                         return (patched,)
                     return hook
 
@@ -325,8 +344,15 @@ def dynamic_activation_patching(
                 )
                 base_hooks.append(h)
 
+            # CHANGED: feed only the new tokens + cache, not the whole growing sequence
             with torch.no_grad():
-                out = base_model(generated)
+                out = base_model(
+                    input_ids=step_tokens_base,
+                    attention_mask=attn_mask_base,
+                    past_key_values=base_past,
+                    use_cache=True,
+                )
+            base_past = out.past_key_values   # NEW: carry cache to next step
 
             for h in base_hooks:
                 h.remove()
@@ -335,11 +361,9 @@ def dynamic_activation_patching(
             next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
             generated  = torch.cat([generated, next_token], dim=1)
 
-            # Stop at EOS
             if next_token.item() == tokenizer.eos_token_id:
                 break
 
-        # Decode only the newly generated tokens
         new_tokens = generated[0, input_ids.shape[1]:]
         all_responses.append(tokenizer.decode(new_tokens, skip_special_tokens=True))
 
