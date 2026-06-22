@@ -100,22 +100,56 @@ def collect_generated_span_activations(
         # Left-padding → number of pad tokens prepended to each example
         pad_lens  = (attn_mask == 0).sum(dim=1).tolist()
 
-        with hook_mgr.record(layers=layers, mode="neurons"):
-            with torch.no_grad():
-                model(**inputs)
-            acts = hook_mgr.get_activations()  # {"neurons_l": [batch, seq_len, intermediate]}
+        # with hook_mgr.record(layers=layers, mode="neurons"):
+        #     with torch.no_grad():
+        #         model(**inputs)
+        #     acts = hook_mgr.get_activations()  # {"neurons_l": [batch, seq_len, intermediate]}
 
-        for b in range(len(batch_prompts)):
-            gen_start = pad_lens[b] + prompt_lens[b]
-            gen_end   = seq_len   # under left-padding, content runs to the end
+        # for b in range(len(batch_prompts)):
+        #     gen_start = pad_lens[b] + prompt_lens[b]
+        #     gen_end   = seq_len   # under left-padding, content runs to the end
 
-            if gen_start >= gen_end:
-                continue  # no generated tokens (e.g. completion fully truncated)
+        #     if gen_start >= gen_end:
+        #         continue  # no generated tokens (e.g. completion fully truncated)
 
-            total_gen_tokens += (gen_end - gen_start)
-            for l in layers:
-                a = acts[f"neurons_{l}"][b, gen_start:gen_end, :]  # [n_gen_b, intermediate]
-                per_layer_chunks[l].append(a.cpu())
+        #     total_gen_tokens += (gen_end - gen_start)
+        #     for l in layers:
+        #         a = acts[f"neurons_{l}"][b, gen_start:gen_end, :]  # [n_gen_b, intermediate]
+        #         per_layer_chunks[l].append(a.cpu())
+
+        # Pre-compute per-example span indices BEFORE the forward pass
+        gen_starts = [pad_lens[b] + prompt_lens[b] for b in range(len(batch_prompts))]
+        gen_ends   = [seq_len] * len(batch_prompts)
+
+        # Inline hooks: slice on GPU, move only the small result to CPU
+        local_hooks = []
+        for layer_idx in layers:
+            mlp = model.model.layers[layer_idx].mlp
+
+            def make_hook(l_idx, gs, ge):
+                def hook(module, input, output):
+                    act = input[0]                                   # [batch, seq, intermediate] on GPU
+                    for b in range(act.shape[0]):
+                        if gs[b] < ge[b]:
+                            # Cheap GPU slice → small CPU tensor; never store the full intermediate
+                            per_layer_chunks[l_idx].append(
+                                act[b, gs[b]:ge[b], :].detach().cpu()
+                            )
+                return hook
+
+            local_hooks.append(
+                mlp.down_proj.register_forward_hook(make_hook(layer_idx, gen_starts, gen_ends))
+            )
+
+        with torch.no_grad():
+            model(**inputs)
+
+        for h in local_hooks:
+            h.remove()
+
+        total_gen_tokens += sum(
+            max(0, gen_ends[b] - gen_starts[b]) for b in range(len(batch_prompts))
+        )
 
     torch.save(
         {"per_layer_chunks": per_layer_chunks, "total_gen_tokens": total_gen_tokens},
