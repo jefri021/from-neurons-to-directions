@@ -490,7 +490,7 @@ def generate_with_neuron_ablation(
         hook_handles.append(h)
 
     try:
-        responses = generate(model, tokenizer, prompts, max_new_tokens=max_new_tokens)
+        responses = generate(model, tokenizer, prompts, max_new_tokens=max_new_tokens, batch_size=4)
     finally:
         for h in hook_handles:
             h.remove()
