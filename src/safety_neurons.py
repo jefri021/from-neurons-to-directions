@@ -476,7 +476,7 @@ def generate_with_neuron_ablation(
         mlp = model.model.layers[layer_idx].mlp
 
         def make_ablation_hook(n_indices):
-            def hook(module, input, output):
+            def hook(module, input):
                 # input[0]: [batch, seq, intermediate_size]
                 # Zero out the selected neuron dimensions
                 patched = input[0].clone()
