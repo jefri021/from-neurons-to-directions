@@ -477,12 +477,11 @@ def generate_with_neuron_ablation(
 
         def make_ablation_hook(n_indices):
             def hook(module, input):
-                # input[0]: [batch, seq, intermediate_size]
-                # Zero out the selected neuron dimensions
-                patched = input[0].clone()
+                x = input[0]
+                # Only clone the columns we're about to modify
+                patched = x.clone()
                 patched[:, :, n_indices] = 0.0
-                # Re-run down_proj with zeroed neurons
-                return module(patched)
+                return (patched,)
             return hook
 
         h = mlp.down_proj.register_forward_pre_hook(
@@ -491,7 +490,7 @@ def generate_with_neuron_ablation(
         hook_handles.append(h)
 
     try:
-        responses = generate(model, tokenizer, prompts, max_new_tokens=max_new_tokens)
+        responses = generate(model, tokenizer, prompts, max_new_tokens=max_new_tokens, batch_size=4)
     finally:
         for h in hook_handles:
             h.remove()
