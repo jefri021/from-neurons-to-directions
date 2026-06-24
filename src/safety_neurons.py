@@ -77,7 +77,6 @@ def collect_generated_span_activations(
         {"per_layer_chunks": {l: [Tensor[n_gen_b, intermediate], ...]},
          "total_gen_tokens": int}
     """
-    hook_mgr = HookManager(model)
     per_layer_chunks = {l: [] for l in layers}
     total_gen_tokens = 0
 
@@ -99,23 +98,6 @@ def collect_generated_span_activations(
         seq_len   = attn_mask.shape[1]
         # Left-padding → number of pad tokens prepended to each example
         pad_lens  = (attn_mask == 0).sum(dim=1).tolist()
-
-        # with hook_mgr.record(layers=layers, mode="neurons"):
-        #     with torch.no_grad():
-        #         model(**inputs)
-        #     acts = hook_mgr.get_activations()  # {"neurons_l": [batch, seq_len, intermediate]}
-
-        # for b in range(len(batch_prompts)):
-        #     gen_start = pad_lens[b] + prompt_lens[b]
-        #     gen_end   = seq_len   # under left-padding, content runs to the end
-
-        #     if gen_start >= gen_end:
-        #         continue  # no generated tokens (e.g. completion fully truncated)
-
-        #     total_gen_tokens += (gen_end - gen_start)
-        #     for l in layers:
-        #         a = acts[f"neurons_{l}"][b, gen_start:gen_end, :]  # [n_gen_b, intermediate]
-        #         per_layer_chunks[l].append(a.cpu())
 
         # Pre-compute per-example span indices BEFORE the forward pass
         gen_starts = [pad_lens[b] + prompt_lens[b] for b in range(len(batch_prompts))]
