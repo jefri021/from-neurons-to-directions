@@ -522,54 +522,22 @@ def collect_activations_with_neuron_ablation(
     layers: list[int],
     max_length: int = 256,
 ) -> dict[str, torch.Tensor]:
-    """
-    Run a forward pass with safety neurons ablated and collect residual
-    stream activations at each specified layer.
 
-    This is the direct bridge to Experiment 2:
-    Use this to recompute the refusal direction AFTER ablating safety neurons,
-    then compare to the original direction via cosine similarity.
-
-    Args:
-        safety_neurons: neurons to zero out (from get_top_safety_neurons)
-        layers:         which layers to collect residual stream from
-
-    Returns:
-        dict["residual_{l}"] → Tensor[n_prompts, hidden_size]
-        Same format as ActivationStore output — can be passed directly
-        to compute_refusal_direction().
-
-    Example:
-        # Collect harmful activations with neurons ablated
-        ablated_harmful = collect_activations_with_neuron_ablation(
-            instruct_model, tokenizer, harmful_prompts, top_neurons, layers=range(32)
-        )
-        # Recompute direction
-        ablated_directions = compute_refusal_direction(ablated_harmful, harmless_acts)
-        # Compare to original
-        for l in range(32):
-            sim = F.cosine_similarity(original_directions[l], ablated_directions[l], dim=0)
-            print(f"Layer {l}: cosine similarity = {sim:.4f}")
-    """
-    # Group safety neurons by layer
     neurons_by_layer: dict[int, list[int]] = {}
     for layer_idx, neuron_idx in safety_neurons:
         neurons_by_layer.setdefault(layer_idx, []).append(neuron_idx)
 
     hook_handles = []
-    residual_storage: dict[str, list[torch.Tensor]] = {
-        f"residual_{l}": [] for l in layers
-    }
 
     # Register neuron ablation hooks
     for layer_idx, neuron_indices in neurons_by_layer.items():
         mlp = model.model.layers[layer_idx].mlp
 
         def make_ablation_hook(n_indices):
-            def hook(module, input, output):
+            def hook(module, input):           # ← 2 args only, no output
                 patched = input[0].clone()
                 patched[:, :, n_indices] = 0.0
-                return module(patched)
+                return (patched,)              # ← return modified input tuple, not module(patched)
             return hook
 
         h = mlp.down_proj.register_forward_pre_hook(
@@ -582,13 +550,11 @@ def collect_activations_with_neuron_ablation(
     hook_mgr.register_residual_hooks(layers)
 
     inputs = tokenize(prompts, tokenizer, model, max_length=max_length)
-
     with torch.no_grad():
         model(**inputs)
-
     acts = hook_mgr.get_activations()
 
-    # Clean up
+    # Clean up both sets of hooks
     for h in hook_handles:
         h.remove()
     hook_mgr.remove()
