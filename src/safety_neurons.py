@@ -547,17 +547,13 @@ def collect_activations_with_neuron_ablation(
 
     # Register residual stream capture hooks
     hook_mgr = HookManager(model)
-    hook_mgr.register_residual_hooks(layers)
-
-    inputs = tokenize(prompts, tokenizer, model, max_length=max_length)
-    with torch.no_grad():
-        model(**inputs)
-    acts = hook_mgr.get_activations()
+    with hook_mgr.record(layers=layers, mode="residual"):
+        _ = generate(model, tokenizer, prompts, max_new_tokens=0, batch_size=64)
+        acts = hook_mgr.get_activations()
 
     # Clean up both sets of hooks
     for h in hook_handles:
         h.remove()
-    hook_mgr.remove()
 
     # Extract last token position → [n_prompts, hidden_size]
     return {key: tensor[:, -1, :].cpu() for key, tensor in acts.items()}
