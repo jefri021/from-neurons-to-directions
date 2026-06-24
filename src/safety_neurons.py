@@ -548,7 +548,7 @@ def collect_activations_with_neuron_ablation(
     # Register residual stream capture hooks
     hook_mgr = HookManager(model)
     with hook_mgr.record(layers=layers, mode="residual"):
-        _ = generate(model, tokenizer, prompts, max_new_tokens=0, batch_size=64)
+        _ = generate(model, tokenizer, prompts, batch_size=64)
         acts = hook_mgr.get_activations()
 
     # Clean up both sets of hooks
