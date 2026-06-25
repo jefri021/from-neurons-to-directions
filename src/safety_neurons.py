@@ -556,7 +556,7 @@ def collect_activations_with_neuron_ablation(
         h.remove()
 
     # Extract last token position → [n_prompts, hidden_size]
-    return {key: tensor[:, -1, :].cpu() for key, tensor in acts.items()}
+    return {key: tensor[:, :, :].cpu() for key, tensor in acts.items()}
 
 
 def validate_neuron_indices(safety_neurons: list[tuple[int, int]], model):
