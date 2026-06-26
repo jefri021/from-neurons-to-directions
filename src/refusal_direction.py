@@ -397,6 +397,7 @@ def generate_with_ablation(
     prompts: list[str],
     direction: torch.Tensor,
     max_new_tokens: int = 200,
+    layer_idx: Optional[int] = None,
 ) -> list[str]:
     """
     Generate with the refusal direction ablated across ALL layers and
@@ -425,10 +426,16 @@ def generate_with_ablation(
             return (hidden,) + output[1:]
         return hidden
 
-    # Register on ALL layers
-    for layer in model.model.layers:
+    if layer_idx is not None:
+        # Register on ONE layer only
+        layer = model.model.layers[layer_idx]
         handle = layer.register_forward_hook(ablation_hook)
         hook_handles.append(handle)
+    else:
+        # Register on ALL layers
+        for layer in model.model.layers:
+            handle = layer.register_forward_hook(ablation_hook)
+            hook_handles.append(handle)
 
     try:
         responses = generate(model, tokenizer, prompts, max_new_tokens=max_new_tokens)
