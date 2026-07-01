@@ -438,3 +438,58 @@ def plot_layer_sensitivity(
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
     ax.legend(fontsize=10)
     return _save_or_return(fig, save_path)
+
+
+def plot_survival_with_null_band(
+    observed_per_layer: dict[int, float],
+    null_per_layer: Optional[dict[int, list[float]]] = None,
+    theoretical_sd: Optional[float] = None,
+    title: str = "Refusal Direction Survival vs. Null Distribution",
+    save_path: Optional[str] = None,
+):
+    """
+    Re-draws the Section 5.7.1 per-layer survival bar chart with a null
+    reference band added behind it.
+
+    If `null_per_layer` is provided (empirical, from empirical_ablation_null),
+    draws a violin/error-bar per layer showing the random-ablation
+    distribution at that exact layer — the rigorous version.
+
+    If only `theoretical_sd` is provided, draws a single flat shaded band
+    at +/- 2 and +/- 3 SD across the whole plot — the quick first-pass version.
+
+    Provide at least one of the two.
+    """
+    import matplotlib.pyplot as plt
+
+    layers = sorted(observed_per_layer.keys())
+    observed = [observed_per_layer[l] for l in layers]
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    if null_per_layer is not None:
+        null_means = [np.mean(null_per_layer[l]) for l in layers]
+        null_sds   = [np.std(null_per_layer[l]) for l in layers]
+        ax.errorbar(
+            layers, null_means, yerr=[2 * s for s in null_sds],
+            fmt="none", ecolor="gray", alpha=0.4, capsize=3,
+            label="Random-neuron ablation null (mean ± 2 SD, empirical)",
+        )
+        ax.scatter(layers, null_means, color="gray", s=15, alpha=0.6, zorder=2)
+
+    elif theoretical_sd is not None:
+        ax.axhspan(-3 * theoretical_sd, 3 * theoretical_sd,
+                    color="gray", alpha=0.15, label="±3 SD (theoretical null)")
+        ax.axhspan(-2 * theoretical_sd, 2 * theoretical_sd,
+                    color="gray", alpha=0.25, label="±2 SD (theoretical null)")
+
+    ax.bar(layers, observed, color="#d9737a", alpha=0.85,
+           label="Observed (safety neuron ablation)", zorder=3)
+
+    ax.set_xlabel("Layer")
+    ax.set_ylabel("Cosine similarity with original refusal direction")
+    ax.set_title(title)
+    ax.legend(loc="upper right", fontsize=9)
+    ax.grid(alpha=0.2)
+    plt.tight_layout()
+    return _save_or_return(fig, save_path)
